@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { FileText, Send, Search, Trash2, Plus, Upload, Download } from 'lucide-react';
+import { FileText, Send, Search, Trash2, Plus, Upload, Download, CheckCircle, Edit } from 'lucide-react';
 import { toast } from 'sonner';
 import { Modal } from '@/components/ui/modal';
 import Papa from 'papaparse';
@@ -27,6 +27,9 @@ export default function Tuition() {
   const [selectedStatus, setSelectedStatus] = useState('');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editRecordId, setEditRecordId] = useState('');
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createFormData, setCreateFormData] = useState({
@@ -54,7 +57,7 @@ export default function Tuition() {
   const [createFormFeeDetails, setCreateFormFeeDetails] = useState<any[]>([]);
 
   useEffect(() => {
-    if (isCreateModalOpen) {
+    if (isCreateModalOpen && !isEditing) {
       const selectedStudent = studentsList.find(s => s.studentId === createFormData.studentId || s.name === createFormData.name);
       if (selectedStudent) {
         let details: any[] = [];
@@ -88,7 +91,7 @@ export default function Tuition() {
         setCreateFormFeeDetails([]);
       }
     }
-  }, [createFormData.studentId, createFormData.name, createFormData.month, createFormData.year, isCreateModalOpen]);
+  }, [createFormData.studentId, createFormData.name, createFormData.month, createFormData.year, isCreateModalOpen, isEditing]);
 
   useEffect(() => {
     if (isCreateModalOpen && createFormFeeDetails.length > 0) {
@@ -212,6 +215,40 @@ export default function Tuition() {
     });
   };
 
+  const handleQuickPay = (id: string) => {
+    const newRecords = records.map(r => {
+      if (r.id === id) {
+        const remaining = r.expectedAmount - r.total;
+        const newTotal = r.expectedAmount;
+        const newFeeDetails = r.feeDetails ? r.feeDetails.map((fd: any) => {
+          if (fd.expected > 0) return { ...fd, paid: fd.expected, checked: true };
+          return fd;
+        }) : [];
+        return { ...r, total: newTotal, status: 'paid', feeDetails: newFeeDetails };
+      }
+      return r;
+    });
+    setRecords(newRecords);
+    localStorage.setItem('demoTuitions', JSON.stringify(newRecords));
+    toast.success('Đã xác nhận thu đủ tiền học phí!');
+  };
+
+  const handleOpenEdit = (record: any) => {
+    setIsEditing(true);
+    setEditRecordId(record.id);
+    setCreateFormData({
+      studentId: record.studentId,
+      name: record.name,
+      class: record.class,
+      month: record.month,
+      year: record.year,
+      total: record.total,
+      status: record.status
+    });
+    setCreateFormFeeDetails(record.feeDetails ? record.feeDetails.map((fd: any) => ({ ...fd, checked: fd.paid > 0 || fd.expected <= 0 })) : []);
+    setIsCreateModalOpen(true);
+  };
+
   const handleCreateSubmit = () => {
     if (!createFormData.studentId && !createFormData.name) {
       toast.error('Vui lòng chọn hoặc nhập tên học sinh');
@@ -288,7 +325,7 @@ export default function Tuition() {
     }
 
     const newRecord = {
-      id: Date.now().toString() + Math.random().toString(36).substring(7),
+      id: isEditing ? editRecordId : Date.now().toString() + Math.random().toString(36).substring(7),
       studentId: selectedStudent?.studentId || createFormData.studentId || 'DT' + Date.now().toString().slice(-4),
       name: selectedStudent?.name || createFormData.name,
       class: selectedStudent?.classId || createFormData.class || 'Chưa xếp lớp',
@@ -301,11 +338,19 @@ export default function Tuition() {
       academicYear: getAcademicYearString(Number(createFormData.month), Number(createFormData.year))
     };
 
-    const newRecords = [...records, newRecord];
+    let newRecords;
+    if (isEditing) {
+      newRecords = records.map(r => r.id === editRecordId ? newRecord : r);
+    } else {
+      newRecords = [...records, newRecord];
+    }
+    
     setRecords(newRecords);
     localStorage.setItem('demoTuitions', JSON.stringify(newRecords));
-    toast.success('Đã thêm công nợ thành công');
+    toast.success(isEditing ? 'Đã cập nhật công nợ / thu tiền thành công' : 'Đã thêm công nợ thành công');
     setIsCreateModalOpen(false);
+    setIsEditing(false);
+    setEditRecordId('');
   };
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -576,7 +621,15 @@ export default function Tuition() {
           <Button onClick={handleExportPDF} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg shadow-sm">
             <FileText className="w-4 h-4" /> Xuất Báo Cáo PDF
           </Button>
-          <Button onClick={() => setIsCreateModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Button onClick={() => {
+            setIsEditing(false);
+            setEditRecordId('');
+            setCreateFormData({
+              studentId: '', name: '', class: '', month: currentMonth, year: currentYear, total: 0, status: 'pending'
+            });
+            setCreateFormFeeDetails([]);
+            setIsCreateModalOpen(true);
+          }} className="bg-blue-600 hover:bg-blue-700 text-white">
             <Plus className="w-4 h-4 mr-2" /> Thêm công nợ
           </Button>
         </div>
@@ -726,6 +779,11 @@ export default function Tuition() {
                     {r.status === 'partial' && <Badge className="bg-yellow-100 text-yellow-700 hover:bg-yellow-100 border-none shadow-none text-xs rounded-md px-2">Đóng thiếu</Badge>}
                   </td>
                   <td className="px-6 py-4 flex items-center justify-end gap-2">
+                    {r.status !== 'paid' && (
+                      <Button size="sm" onClick={() => handleQuickPay(r.id)} className="bg-green-600 hover:bg-green-700 text-white shadow-sm font-medium">
+                        <CheckCircle className="w-4 h-4 mr-1" /> Thu đủ
+                      </Button>
+                    )}
                     {r.status === 'overdue' && (
                       <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleRemind(r.parentEmail)}>
                         <Send className="w-3 h-3 mr-2" /> Nhắc nợ
@@ -741,6 +799,9 @@ export default function Tuition() {
                         Nhắc Đóng
                       </Button>
                     )}
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-500 hover:text-blue-600 hover:bg-blue-50" onClick={() => handleOpenEdit(r)} title="Cập nhật / Thu tiền">
+                      <Edit className="w-4 h-4" />
+                    </Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50" onClick={() => handleDeleteRecord(r.id)}>
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -769,15 +830,15 @@ export default function Tuition() {
         <p className="text-slate-600">{confirmModal.message}</p>
       </Modal>
 
-      {/* Create / Add Tuition Modal */}
+      {/* Create / Edit Tuition Modal */}
       <Modal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
-        title="Thêm Công Nợ Mới"
+        title={isEditing ? "Cập nhật Công Nợ / Thu Tiền" : "Thêm Công Nợ Mới"}
         footer={
           <>
             <Button variant="outline" onClick={() => setIsCreateModalOpen(false)} className="border-slate-200">Huỷ</Button>
-            <Button onClick={handleCreateSubmit} className="bg-blue-600 text-white hover:bg-blue-700">Lưu Công Nợ</Button>
+            <Button onClick={handleCreateSubmit} className="bg-blue-600 text-white hover:bg-blue-700">{isEditing ? "Lưu Cập Nhật" : "Lưu Công Nợ"}</Button>
           </>
         }
       >

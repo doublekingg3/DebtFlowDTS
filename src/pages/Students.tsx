@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Edit2, Trash2, Download, Upload, CheckSquare, Square } from 'lucide-react';
+import { Plus, Edit2, Trash2, Download, Upload, CheckSquare, Square, Banknote } from 'lucide-react';
 import { toast } from 'sonner';
 import { Modal } from '@/components/ui/modal';
 import { Student } from '../types';
@@ -124,6 +124,16 @@ export default function Students() {
     deductionIds: []
   });
 
+  // Payment Modal State
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentStudent, setPaymentStudent] = useState<Student | null>(null);
+  const [paymentData, setPaymentData] = useState({
+    month: new Date().getMonth() + 1,
+    year: new Date().getFullYear(),
+    totalPaid: 0,
+  });
+  const [paymentFeeDetails, setPaymentFeeDetails] = useState<any[]>([]);
+
   const [isClassDropdownOpen, setIsClassDropdownOpen] = useState(false);
   const [classSearchTerm, setClassSearchTerm] = useState('');
 
@@ -191,6 +201,112 @@ export default function Students() {
         deductionIds: current.includes(dedId) ? current.filter(id => id !== dedId) : [...current, dedId]
       };
     });
+  };
+
+  useEffect(() => {
+    if (isPaymentModalOpen && paymentStudent) {
+      let details: any[] = [];
+      const mNum = paymentData.month;
+      paymentStudent.feeIds?.forEach((fId: string) => {
+        const f = FEE_CATEGORIES.find(x => x.id === fId);
+        if (f) {
+          let price = f.price || 0;
+          if (f.type === 'once' || f.type === 'yearly') {
+            if (mNum !== getAcademicStartMonth() && mNum !== getAcademicStartMonth() + 1) price = 0;
+          }
+          if (price > 0) {
+            details.push({ feeId: f.id, name: f.name, expected: price, paid: price, checked: true });
+          }
+        }
+      });
+      paymentStudent.deductionIds?.forEach((dId: string) => {
+        const d = DEDUCTION_CATEGORIES.find(x => x.id === dId);
+        if (d) {
+          let discount = d.value || 0;
+          if (d.type === 'once' || d.type === 'yearly') {
+            if (mNum !== getAcademicStartMonth() && mNum !== getAcademicStartMonth() + 1) discount = 0;
+          }
+          if (discount !== 0) {
+            details.push({ feeId: d.id, name: d.name, expected: discount, paid: discount, checked: true });
+          }
+        }
+      });
+      setPaymentFeeDetails(details);
+    } else {
+      setPaymentFeeDetails([]);
+    }
+  }, [paymentStudent, paymentData.month, paymentData.year, isPaymentModalOpen]);
+
+  useEffect(() => {
+    if (isPaymentModalOpen && paymentFeeDetails.length > 0) {
+      let sum = 0;
+      paymentFeeDetails.forEach(d => {
+        if (d.expected > 0) {
+          if (d.checked) sum += Number(d.paid || 0);
+        } else {
+          sum += Number(d.paid || 0); // Deductions
+        }
+      });
+      setPaymentData(prev => ({ ...prev, totalPaid: Math.max(0, sum) }));
+    }
+  }, [paymentFeeDetails, isPaymentModalOpen]);
+
+  const handleOpenPayment = (student: Student) => {
+    setPaymentStudent(student);
+    const d = new Date();
+    setPaymentData({ month: d.getMonth() + 1, year: d.getFullYear(), totalPaid: 0 });
+    setIsPaymentModalOpen(true);
+  };
+
+  const handlePaymentSubmit = () => {
+    if (!paymentStudent) return;
+    let expectedTotal = 0;
+    let finalFeeDetails: any[] = [];
+    
+    paymentFeeDetails.forEach(fd => {
+      if (fd.expected > 0) {
+        expectedTotal += fd.expected;
+        finalFeeDetails.push({ feeId: fd.feeId, name: fd.name, expected: fd.expected, paid: fd.checked ? fd.paid : 0 });
+      } else {
+        expectedTotal += fd.expected;
+        finalFeeDetails.push({ feeId: fd.feeId, name: fd.name, expected: fd.expected, paid: fd.expected });
+      }
+    });
+    expectedTotal = Math.max(0, expectedTotal);
+    
+    const amt = Number(paymentData.totalPaid);
+    let st = 'pending';
+    if (amt >= expectedTotal && expectedTotal > 0) st = 'paid';
+    else if (amt > 0 && amt < expectedTotal) st = 'partial';
+    else if (amt === 0) st = 'pending';
+
+    const newRecord = {
+      id: Date.now().toString() + Math.random().toString(36).substring(7),
+      studentId: paymentStudent.studentId,
+      name: paymentStudent.name,
+      class: paymentStudent.classId || 'Chưa xếp lớp',
+      month: paymentData.month,
+      year: paymentData.year,
+      total: amt,
+      expectedAmount: expectedTotal,
+      feeDetails: finalFeeDetails,
+      status: st,
+      academicYear: getAcademicYearString(paymentData.month, paymentData.year)
+    };
+
+    const existingIdx = tuitions.findIndex(t => t.studentId === newRecord.studentId && t.month === newRecord.month && t.year === newRecord.year && t.academicYear === newRecord.academicYear);
+    
+    let updatedTuitions = [...tuitions];
+    if (existingIdx >= 0) {
+       updatedTuitions[existingIdx] = newRecord; // Override if paying for the same month again
+    } else {
+       updatedTuitions.push(newRecord);
+    }
+    
+    setTuitions(updatedTuitions);
+    localStorage.setItem('demoTuitions', JSON.stringify(updatedTuitions));
+    toast.success(`Đã tạo phiếu thu ${amt.toLocaleString()}đ cho học sinh ${paymentStudent.name}`);
+    setIsPaymentModalOpen(false);
   };
 
   const handleSave = () => {
@@ -1106,10 +1222,13 @@ export default function Students() {
                           </div>
                         </td>
                         <td className="px-6 py-4 text-right">
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-blue-600 hover:bg-blue-50" onClick={() => handleOpenEdit(student)}>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-green-600 hover:bg-green-50" onClick={() => handleOpenPayment(student)} title="Thu tiền học phí">
+                          <Banknote className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-blue-600 hover:bg-blue-50" onClick={() => handleOpenEdit(student)} title="Chỉnh sửa hồ sơ">
                           <Edit2 className="w-4 h-4" />
                         </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50" onClick={() => handleDelete(student.id)}>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50" onClick={() => handleDelete(student.id)} title="Xóa học sinh">
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </td>
@@ -1122,6 +1241,111 @@ export default function Students() {
           </div>
         </Card>
       </div>
+
+      {/* Payment Modal */}
+      <Modal
+        isOpen={isPaymentModalOpen}
+        onClose={() => setIsPaymentModalOpen(false)}
+        title={paymentStudent ? `Tạo Phiếu Thu: ${paymentStudent.name}` : 'Thu tiền'}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setIsPaymentModalOpen(false)} className="border-slate-200">Huỷ</Button>
+            <Button onClick={handlePaymentSubmit} className="bg-green-600 hover:bg-green-700 text-white">Xác nhận thu</Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-slate-700">Kỳ thu (Tháng)</Label>
+              <select className="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-100"
+                value={paymentData.month} onChange={e => setPaymentData({...paymentData, month: Number(e.target.value)})}>
+                {[...Array(12)].map((_, i) => <option key={i} value={i+1}>Tháng {i+1}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-slate-700">Năm</Label>
+              <Input
+                type="number"
+                value={paymentData.year}
+                className="focus:ring-green-100 border-slate-200"
+                onChange={e => setPaymentData({...paymentData, year: Number(e.target.value)})}
+              />
+            </div>
+            
+            {paymentFeeDetails.length > 0 && (
+              <div className="col-span-2 space-y-3 mt-2 border-t border-slate-100 pt-4">
+                <Label className="text-slate-700 font-semibold">Chi tiết các khoản phí</Label>
+                <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-2">
+                  {paymentFeeDetails.map((fd, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-slate-50 p-3 rounded-lg border border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 text-green-600 rounded border-slate-300"
+                          checked={fd.checked}
+                          onChange={(e) => {
+                            const newDetails = [...paymentFeeDetails];
+                            newDetails[idx].checked = e.target.checked;
+                            setPaymentFeeDetails(newDetails);
+                          }}
+                        />
+                        <div className="flex-1">
+                          <p className="font-medium text-sm text-slate-800">{fd.name}</p>
+                          {fd.expected > 0 && (
+                            <p className="text-xs text-slate-500 mt-1">Yêu cầu: <span className="font-medium">{fd.expected.toLocaleString()}</span> ₫</p>
+                          )}
+                        </div>
+                      </div>
+                      {fd.expected > 0 ? (
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-slate-500 whitespace-nowrap">Thực đóng:</Label>
+                            <Input
+                              type="number"
+                              className="w-28 h-8 text-right font-medium focus:ring-green-100 border-slate-200"
+                              value={fd.paid || ''}
+                              disabled={!fd.checked}
+                              onChange={(e) => {
+                                const newDetails = [...paymentFeeDetails];
+                                newDetails[idx].paid = Number(e.target.value);
+                                setPaymentFeeDetails(newDetails);
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                         <div className="flex flex-col items-end gap-1">
+                           <div className="flex items-center gap-2">
+                             <Label className="text-xs text-slate-500 whitespace-nowrap">Giảm trừ:</Label>
+                             <Input
+                               type="number"
+                               className="w-28 h-8 text-right font-medium text-emerald-600 focus:ring-green-100 border-slate-200 bg-emerald-50/50"
+                               value={Math.abs(fd.expected) || ''}
+                               disabled={!fd.checked}
+                               onChange={(e) => {
+                                 const newDetails = [...paymentFeeDetails];
+                                 const val = -Math.abs(Number(e.target.value));
+                                 newDetails[idx].expected = val;
+                                 newDetails[idx].paid = val;
+                                 setPaymentFeeDetails(newDetails);
+                               }}
+                             />
+                           </div>
+                         </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between bg-green-50 p-4 rounded-lg border border-green-100 mt-4 shadow-sm">
+                  <span className="font-semibold text-green-900 uppercase tracking-wider text-sm">Tổng thu:</span>
+                  <span className="font-bold text-green-700 text-xl">{paymentData.totalPaid.toLocaleString()} ₫</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
 
       {/* Edit Student / Fees Modal */}
       <Modal
