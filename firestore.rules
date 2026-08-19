@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Helper Functions
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { 
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; 
+    }
+    function isStaff() { 
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+      (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff' || isAdmin()); 
+    }
+    
+    // Allow reading user own data, or admin/staff can read all
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isStaff());
+      allow write: if isAdmin() || (request.auth.uid == userId && request.resource.data.role == resource.data.role); // self-update without role change
+      allow create: if isSignedIn() && request.auth.uid == userId; // Allow self registration for initial setup
+    }
+
+    match /classes/{classId} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    match /students/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    match /feeCategories/{catId} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    match /tuitionRecords/{recordId} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    match /trash/{trashId} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Fallback block
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
